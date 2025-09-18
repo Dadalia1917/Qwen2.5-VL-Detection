@@ -1,0 +1,15 @@
+# Python生成文件
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# 虚拟环境
+.venv
+
+# 排除大型数据目录
+datasets/
+models/
+outputs/
