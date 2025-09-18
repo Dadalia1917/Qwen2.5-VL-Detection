@@ -205,6 +205,60 @@ outputs/
 - 项目参考文章: https://blog.csdn.net/qq_42589613/article/details/151677057?spm=1001.2014.3001.5501
 - 模型下载地址: https://modelscope.cn/models/Qwen/Qwen2.5-VL-3B-Instruct
 
+## 扩展应用指南
+
+本项目可通过修改提示词和数据集来适应不同的目标检测任务，如生活垃圾分类检测、车辆检测、烟雾检测等。
+
+### 1. 更换提示词方法
+
+要更改检测任务，需要修改`main.py`文件中的提示词：
+
+1. **系统提示词（System Prompt）**：位于第28行，定义模型的角色和任务
+   - 修改`system_prompt`变量中的内容，指定新的检测目标
+   - 例如，对于垃圾分类任务，可改为："You are an expert in object detection, specifically for identifying different types of garbage in images..."
+
+2. **用户提示词（User Prompt）**：位于第54行，提供具体的检测指令
+   - 修改`user_prompt`变量中的内容，明确检测规则和输出格式
+   - 根据新任务调整检测规则和标签要求
+
+3. **标签标准化**：在`parse_detection_result`函数中（第250行左右），根据需要修改标签标准化逻辑
+   - 更新标签映射规则以适应新任务
+   - 例如，将"box"/"boxes"映射到"carton"的规则可以改为其他标签映射
+
+### 2. 数据集更换与放置方式
+
+1. **数据集目录结构**：
+   ```
+   datasets/
+   └── Data/
+       ├── test/           # 测试数据集（用于推理）
+       │   ├── image1.jpg
+       │   ├── image2.png
+       │   └── ...
+       ├── train/          # 训练数据集（如需微调）
+       └── val/            # 验证数据集（如需微调）
+   ```
+
+2. **数据集更换步骤**：
+   - 将新的训练数据集放入`datasets/Data/train/`目录
+   - 将新的验证数据集放入`datasets/Data/val/`目录
+   - 将待检测的图像放入`datasets/Data/test/`目录
+   - 确保图像格式为`.jpg`、`.jpeg`或`.png`
+   - 如需使用YOLO格式标签文件进行微调，需按YOLO格式准备标签文件
+
+3. **数据集格式要求**：
+   - 图像文件：建议分辨率在640x480以上，确保目标物体清晰可见
+   - 标签文件（如需）：YOLO格式，每个图像对应一个同名.txt文件
+   - 数据质量：避免模糊、过曝或严重遮挡的图像
+
+### 3. 任务切换示例
+
+以车辆检测任务为例：
+1. 修改系统提示词为："You are an expert in object detection, specifically for identifying vehicles (cars, trucks, buses) in images..."
+2. 修改用户提示词，将检测规则中的"cardboard boxes (cartons)"替换为"vehicles"
+3. 更新标签标准化逻辑，将"carton"映射改为相应的车辆类别
+4. 准备车辆检测数据集，按上述目录结构放置
+
 ## 注意事项
 1. 首次运行时，程序会自动加载模型，这可能需要一些时间
 2. 程序需要较大的显存，建议使用具有至少8GB显存的GPU
