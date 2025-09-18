@@ -55,7 +55,7 @@
    └── Data/
        ├── test/
        │   ├── image1.jpg
-       │   ├── image2.png
+       │   ├── image2.jpg
        │   └── ...
        ├── train/
        └── val/
