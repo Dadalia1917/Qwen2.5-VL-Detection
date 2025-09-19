@@ -12,10 +12,9 @@ def load_model(model_path):
         model_path,
         torch_dtype=torch.bfloat16,
         attn_implementation="flash_attention_2",
-        device_map="auto",
-        trust_remote_code=True
+        device_map="auto"
     )
-    processor = AutoProcessor.from_pretrained(model_path, use_fast=True, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(model_path)
     print("模型加载完成")
     return model, processor
 
@@ -24,57 +23,9 @@ def detect_objects(model, processor, image_path):
     # 打开图像
     image = Image.open(image_path)
 
-    # 定义系统提示和用户提示，优化目标检测效果
-    system_prompt = '''You are an expert in object detection, specifically for identifying cardboard boxes (cartons) in images. Your task is to detect and provide precise bounding boxes for ALL cardboard boxes visible in the image.
-
-Your response must include:
-1. Accurate bounding box coordinates in the format [x1, y1, x2, y2] where (x1, y1) is the top-left corner and (x2, y2) is the bottom-right corner
-2. The label "carton" for each box
-
-Critical detection rules:
-- ONLY detect cardboard boxes (carton), ignore all other objects
-- Detect each individual box separately, especially when multiple boxes are present
-- Provide precise coordinates that tightly bound each box
-- Avoid grouping multiple boxes into a single large bounding box
-- If you see multiple small boxes, detect each one individually rather than combining them
-- ONLY detect boxes you are extremely confident about (confidence > 90%)
-- DO NOT detect boxes that are heavily occluded, blurry, or unclear
-- DO NOT detect reflections, shadows, or background patterns as boxes
-- AVOID duplicate detections of the same box
-- If in doubt, do not include the box in the results
-- Count and detect all visible boxes, even if they are at different distances or angles
-- Pay special attention to boxes in the background or at the edges of the image
-- Boxes may be of different sizes, orientations, and colors but must be cardboard boxes
-
-Return the results in strict JSON format:
-[{"bbox_2d": [x1, y1, x2, y2], "label": "carton"}, ...]
-
-Example format:
-[{"bbox_2d": [100, 150, 200, 250], "label": "carton"}]'''
-    user_prompt = '''Carefully analyze the image and detect ALL cardboard boxes (carton). For each box, provide:
-1. Accurate bounding box coordinates in the format [x1, y1, x2, y2] where (x1, y1) is the top-left corner and (x2, y2) is the bottom-right corner
-2. The label "carton" for each box
-
-Critical detection rules:
-- ONLY detect cardboard boxes (carton), ignore all other objects
-- Detect each individual box separately, especially when multiple boxes are present
-- Provide precise coordinates that tightly bound each box
-- Avoid grouping multiple boxes into a single large bounding box
-- If you see multiple small boxes, detect each one individually rather than combining them
-- ONLY detect boxes you are extremely confident about (confidence > 90%)
-- DO NOT detect boxes that are heavily occluded, blurry, or unclear
-- DO NOT detect reflections, shadows, or background patterns as boxes
-- AVOID duplicate detections of the same box
-- If in doubt, do not include the box in the results
-- Count and detect all visible boxes, even if they are at different distances or angles
-- Pay special attention to boxes in the background or at the edges of the image
-- Boxes may be of different sizes, orientations, and colors but must be cardboard boxes
-
-Return the results in strict JSON format:
-[{"bbox_2d": [x1, y1, x2, y2], "label": "carton"}, ...]
-
-Example format:
-[{"bbox_2d": [100, 150, 200, 250], "label": "carton"}]'''
+    # 定义系统提示和用户提示
+    system_prompt = "You are a helpful assistant specializing in object detection. Please identify and locate objects accurately with their bounding box coordinates."
+    user_prompt = "Please detect all cardboard boxes in this image. For each box, provide precise bounding box coordinates in JSON format: [{'bbox_2d': [x1, y1, x2, y2], 'label': 'carton'}]. Only detect clearly visible cardboard boxes."
 
     # 构建消息
     messages = [
@@ -92,21 +43,8 @@ Example format:
     inputs = processor(text=[text], images=[image], padding=True, return_tensors="pt")
     inputs = inputs.to('cuda')
 
-    # 生成输出，调整参数以提高准确性
-    generation_config = {
-        "max_new_tokens": 2048,  # 适当减少最大令牌数以提高响应速度
-        "do_sample": False,  # 使用贪婪解码以提高一致性
-        "temperature": None,  # 明确设置为None以避免警告
-        "top_p": None,  # 明确设置为None以避免警告
-        "repetition_penalty": 1.2,  # 增加重复惩罚以避免重复输出
-        "length_penalty": 1.0,  # 保持长度惩罚以鼓励完整输出
-        "num_beams": 3  # 使用束搜索以提高输出质量
-    }
-
-    # 过滤掉None值
-    generation_config = {k: v for k, v in generation_config.items() if v is not None}
-
-    output_ids = model.generate(**inputs, **generation_config)
+    # 生成输出
+    output_ids = model.generate(**inputs, max_new_tokens=1024)
     generated_ids = [output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs.input_ids, output_ids)]
     output_text = processor.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=True)
 
@@ -115,162 +53,60 @@ Example format:
 def parse_detection_result(result_text, image_size=None):
     """解析检测结果，提取边界框信息"""
     try:
-        # 查找JSON部分
-        start_idx = result_text.find('```json')
-        if start_idx != -1:
-            start_idx += 7  # 跳过```json
-            end_idx = result_text.find('```', start_idx)
-            if end_idx == -1:
-                end_idx = len(result_text)
-            json_text = result_text[start_idx:end_idx].strip()
-        else:
-            # 查找第一个左方括号和最后一个右方括号
-            start_idx = result_text.find('[')
-            end_idx = result_text.rfind(']') + 1
-            if start_idx != -1 and end_idx > start_idx:
-                json_text = result_text[start_idx:end_idx]
-            else:
-                json_text = result_text
-
-        # 清理JSON文本，确保格式正确
-        json_text = json_text.strip()
-        if json_text.startswith('```') and json_text.endswith('```'):
-            json_text = json_text[3:-3].strip()
-        if json_text.startswith('json'):
-            json_text = json_text[4:].strip()
-
-        # 尝试修复常见的JSON格式问题
-        # 确保标签字段使用双引号
         import re
-        json_text = re.sub(r"'label':\s*'([^']*)'", r'"label": "\1"', json_text)
-        json_text = re.sub(r"'bbox_2d':", '"bbox_2d":', json_text)
-        json_text = re.sub(r"'([^']*)':", r'"\1":', json_text)  # 将单引号键替换为双引号
-
+        
+        # 清理文本，提取JSON部分
+        cleaned_text = result_text
+        if '```json' in cleaned_text:
+            cleaned_text = cleaned_text.split('```json')[1].split('```')[0]
+        elif '[' in cleaned_text and ']' in cleaned_text:
+            # 提取JSON数组部分
+            start = cleaned_text.find('[')
+            end = cleaned_text.rfind(']') + 1
+            cleaned_text = cleaned_text[start:end]
+        
+        # 修复常见的JSON格式问题
+        cleaned_text = re.sub(r"'([^']*)':", r'"\1":', cleaned_text)
+        cleaned_text = re.sub(r":\s*'([^']*)'", r': "\1"', cleaned_text)
+        
         # 解析JSON
-        detection_result = json.loads(json_text)
-
-        # 后处理：确保每个检测结果都有正确的格式
+        detection_result = json.loads(cleaned_text)
+        
         processed_result = []
         for obj in detection_result:
             if isinstance(obj, dict) and 'bbox_2d' in obj and 'label' in obj:
-                # 确保标签是字符串
-                label = str(obj['label']).lower().strip()
-                # 标准化标签
-                if 'box' in label and 'carton' not in label:
-                    label = 'carton'
-                elif label in ['boxes', 'box']:
-                    label = 'carton'
-
-                # 确保边界框坐标是数字
-                bbox = obj['bbox_2d']
-                if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-                    # 确保坐标是整数
-                    bbox = [int(coord) for coord in bbox]
-                    # 确保坐标顺序正确 (x1, y1, x2, y2)
-                    x1, y1, x2, y2 = bbox
-                    if x1 > x2:
-                        x1, x2 = x2, x1
-                    if y1 > y2:
-                        y1, y2 = y2, y1
-                    bbox = [x1, y1, x2, y2]
-
-                    # 验证检测框是否在图像范围内
-                    if image_size:
-                        img_width, img_height = image_size
-                        x1 = max(0, min(x1, img_width))
-                        x2 = max(0, min(x2, img_width))
-                        y1 = max(0, min(y1, img_height))
-                        y2 = max(0, min(y2, img_height))
-                        # 确保检测框有最小尺寸
-                        if x2 - x1 > 5 and y2 - y1 > 5:
-                            bbox = [x1, y1, x2, y2]
-                            processed_result.append({
-                                'bbox_2d': bbox,
-                                'label': label
-                            })
-                    else:
+                bbox = [int(coord) for coord in obj['bbox_2d']]
+                x1, y1, x2, y2 = bbox
+                
+                # 确保坐标顺序正确
+                if x1 > x2:
+                    x1, x2 = x2, x1
+                if y1 > y2:
+                    y1, y2 = y2, y1
+                
+                # 验证检测框有效性
+                if image_size:
+                    img_width, img_height = image_size
+                    x1 = max(0, min(x1, img_width))
+                    x2 = max(0, min(x2, img_width))
+                    y1 = max(0, min(y1, img_height))
+                    y2 = max(0, min(y2, img_height))
+                    
+                    if x2 - x1 > 5 and y2 - y1 > 5:
                         processed_result.append({
-                            'bbox_2d': bbox,
-                            'label': label
+                            'bbox_2d': [x1, y1, x2, y2],
+                            'label': 'carton'
                         })
-
-        # 进一步优化：去除重复或重叠的检测框
-        processed_result = remove_duplicate_detections(processed_result, iou_threshold=0.3)  # 调整IoU阈值以平衡去重和完整性
-
-        return processed_result
+                else:
+                    processed_result.append({
+                        'bbox_2d': [x1, y1, x2, y2],
+                        'label': 'carton'
+                    })
+        
+        return remove_duplicate_detections(processed_result)
+        
     except Exception as e:
         print(f"解析检测结果时出错: {e}")
-        print(f"原始结果: {result_text}")
-        # 尝试使用更强大的解析方法
-        try:
-            # 清理文本
-            cleaned_text = result_text.replace('```json', '').replace('```', '').strip()
-            # 尝试修复常见的格式问题
-            cleaned_text = cleaned_text.strip()
-
-            # 使用正则表达式提取JSON数组
-            import re
-            json_match = re.search(r'\[.*\]', cleaned_text, re.DOTALL)
-            if json_match:
-                json_text = json_match.group(0)
-                # 尝试修复更多的格式问题
-                json_text = re.sub(r"'([^']*)':", r'"\1":', json_text)  # 将单引号键替换为双引号
-                json_text = re.sub(r"'label':\s*'([^']*)'", r'"label": "\1"', json_text)
-                json_text = re.sub(r"'bbox_2d':", '"bbox_2d":', json_text)
-                json_text = re.sub(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*:', r'"\1":', json_text)  # 为未加引号的键添加引号
-                json_text = re.sub(r':\s*([a-zA-Z_][a-zA-Z0-9_]*)', r': "\1"', json_text)  # 为未加引号的字符串值添加引号
-
-                # 解析JSON
-                detection_result = json.loads(json_text)
-
-                # 后处理
-                processed_result = []
-                for obj in detection_result:
-                    if isinstance(obj, dict) and 'bbox_2d' in obj and 'label' in obj:
-                        label = str(obj['label']).lower().strip()
-                        if 'box' in label and 'carton' not in label:
-                            label = 'carton'
-                        elif label in ['boxes', 'box']:
-                            label = 'carton'
-
-                        bbox = obj['bbox_2d']
-                        if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-                            bbox = [int(coord) for coord in bbox]
-                            x1, y1, x2, y2 = bbox
-                            if x1 > x2:
-                                x1, x2 = x2, x1
-                            if y1 > y2:
-                                y1, y2 = y2, y1
-                            bbox = [x1, y1, x2, y2]
-
-                            # 验证检测框是否在图像范围内
-                            if image_size:
-                                img_width, img_height = image_size
-                                x1 = max(0, min(x1, img_width))
-                                x2 = max(0, min(x2, img_width))
-                                y1 = max(0, min(y1, img_height))
-                                y2 = max(0, min(y2, img_height))
-                                # 确保检测框有最小尺寸
-                                if x2 - x1 > 5 and y2 - y1 > 5:
-                                    bbox = [x1, y1, x2, y2]
-                                    processed_result.append({
-                                        'bbox_2d': bbox,
-                                        'label': label
-                                    })
-                            else:
-                                processed_result.append({
-                                    'bbox_2d': bbox,
-                                    'label': label
-                                })
-
-                # 进一步优化：去除重复或重叠的检测框
-                processed_result = remove_duplicate_detections(processed_result, iou_threshold=0.3)
-
-                return processed_result
-        except Exception as e2:
-            print(f"备选方案解析也失败: {e2}")
-            pass
-
         return []
 
 def remove_duplicate_detections(detections, iou_threshold=0.5):
@@ -338,61 +174,29 @@ def remove_duplicate_detections(detections, iou_threshold=0.5):
 
 def draw_bounding_boxes(image_path, detection_result, output_path):
     """在图像上绘制边界框并保存"""
-    # 打开图像
     image = Image.open(image_path)
     draw = ImageDraw.Draw(image)
-
-    # 尝试使用适中的字体大小以提高可见性
+    
     try:
         from PIL import ImageFont
-        font = ImageFont.truetype("arial.ttf", 20)  # 减小字体到20
+        font = ImageFont.truetype("arial.ttf", 16)
     except:
-        try:
-            font = ImageFont.truetype("DejaVuSans.ttf", 20)  # 减小字体到20
-        except:
-            font = ImageFont.load_default()
-
-    # 为不同标签定义颜色
-    colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan', 'magenta', 'lime']
-
-    # 绘制每个检测到的对象
+        font = ImageFont.load_default()
+    
+    colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'pink', 'cyan']
+    
     for i, obj in enumerate(detection_result):
-        if 'bbox_2d' in obj and len(obj['bbox_2d']) == 4 and 'label' in obj:
-            bbox = obj['bbox_2d']
+        if 'bbox_2d' in obj and 'label' in obj:
+            x1, y1, x2, y2 = obj['bbox_2d']
             label = obj['label']
-
-            # 确保边界框坐标正确
-            x1, y1, x2, y2 = bbox
-            if x1 > x2:
-                x1, x2 = x2, x1
-            if y1 > y2:
-                y1, y2 = y2, y1
-
-            # 选择颜色
             color = colors[i % len(colors)]
-
-            # 绘制边界框（增加宽度到4以提高可见性）
-            draw.rectangle([x1, y1, x2, y2], outline=color, width=4)
-
-            # 绘制标签背景以增强可见性
-            # 计算文本大小
-            try:
-                # 对于较新版本的PIL
-                text_bbox = draw.textbbox((x1, y1 - 30), label, font=font)  # 将标签位置移到检测框外侧上方
-                text_width = text_bbox[2] - text_bbox[0]
-                text_height = text_bbox[3] - text_bbox[1]
-            except:
-                # 对于较旧版本的PIL
-                text_width, text_height = draw.textsize(label, font=font)
-
-            # 绘制标签背景框（稍微扩大背景框以提高可见性，位置在检测框外侧上方）
-            draw.rectangle([x1-2, y1 - text_height - 2, x1 + text_width+2, y1], fill=color)
-
-            # 绘制标签文本（使用白色字体以增强对比度，并添加轻微阴影效果，位置在检测框外侧上方）
-            draw.text((x1+1, y1 - text_height + 1), label, fill="black", font=font)  # 添加黑色阴影
-            draw.text((x1, y1 - text_height), label, fill="white", font=font)  # 主要白色文本
-
-    # 保存图像
+            
+            # 绘制边界框
+            draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
+            
+            # 绘制标签
+            draw.text((x1, y1 - 20), label, fill=color, font=font)
+    
     image.save(output_path)
     print(f"结果图像已保存到: {output_path}")
 
@@ -457,28 +261,23 @@ def main():
     for i, image_file in enumerate(image_files):
         print(f"\n处理图像 ({i+1}/{len(image_files)}): {image_file}")
         
-        # 构建文件路径
         image_path = os.path.join(images_folder, image_file)
         base_name = os.path.splitext(image_file)[0]
         
         try:
-            # 打开图像以获取尺寸信息
             image = Image.open(image_path)
-            image_size = image.size  # (width, height)
+            image_size = image.size
             
             # 检测对象
             result_text = detect_objects(model, processor, image_path)
-            print(f"检测结果: {result_text}")
             
             # 保存原始结果
             raw_output_path = os.path.join(raw_output_folder, f"{base_name}_raw.txt")
             with open(raw_output_path, 'w', encoding='utf-8') as f:
                 f.write(result_text)
-            print(f"原始输出已保存到: {raw_output_path}")
             
-            # 解析检测结果，传递图像尺寸信息
+            # 解析检测结果
             detection_result = parse_detection_result(result_text, image_size)
-            print(f"解析后的检测结果: {detection_result}")
             print(f"检测到 {len(detection_result)} 个对象")
             
             if detection_result:
@@ -486,20 +285,20 @@ def main():
                 json_output_path = os.path.join(json_output_folder, f"{base_name}_detection.json")
                 save_detection_result(detection_result, json_output_path)
                 
-                # 绘制边界框并保存图像
+                # 绘制边界框
                 image_output_path = os.path.join(images_output_folder, f"{base_name}_detection.jpg")
                 draw_bounding_boxes(image_path, detection_result, image_output_path)
                 
-                # 保存YOLO格式标签文件
+                # 保存YOLO格式标签
                 labels_output_path = os.path.join(labels_output_folder, f"{base_name}.txt")
                 save_yolo_labels(detection_result, image_size, labels_output_path)
                 
-                print(f"成功处理图像: {image_file}")
+                print(f"完成处理: {image_file}")
             else:
-                print(f"未检测到对象或解析失败: {image_file}")
+                print(f"未检测到对象: {image_file}")
                 
         except Exception as e:
-            print(f"处理图像 {image_file} 时出错: {e}")
+            print(f"处理错误 {image_file}: {e}")
             continue
 
 if __name__ == "__main__":

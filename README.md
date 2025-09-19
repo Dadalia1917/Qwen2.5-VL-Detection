@@ -53,16 +53,36 @@
    ```
    datasets/
    └── Data/
-       ├── test/
+       ├── data.yaml
+       ├── test/                    # 推理测试数据（只包含图片）
        │   ├── image1.jpg
        │   ├── image2.jpg
        │   └── ...
-       ├── train/
-       └── val/
+       ├── train/                   # YOLO格式训练数据
+       │   ├── classes.txt
+       │   ├── data.yaml
+       │   ├── images/
+       │   │   ├── image1.jpg
+       │   │   └── ...
+       │   ├── labels/
+       │   │   ├── image1.txt
+       │   │   └── ...
+       │   └── labels.cache
+       └── val/                     # YOLO格式验证数据
+           ├── classes.txt
+           ├── data.yaml
+           ├── images/
+           │   ├── image1.jpg
+           │   └── ...
+           ├── labels/
+           │   ├── image1.txt
+           │   └── ...
+           └── labels.cache
    ```
 
 2. **数据准备**：
-   - 将所有待检测的图像文件放入 `datasets/Data/test` 目录
+   - 将待检测的图像文件放入 `datasets/Data/test` 目录（用于推理）
+   - `train/` 和 `val/` 目录包含YOLO格式的训练和验证数据
    - 支持的图像格式：`.jpg`, `.jpeg`, `.png`
    - 确保图像文件名不包含特殊字符
 
@@ -231,24 +251,43 @@ outputs/
    ```
    datasets/
    └── Data/
-       ├── test/           # 测试数据集（用于推理）
+       ├── data.yaml
+       ├── test/                    # 推理测试数据（只包含图片）
        │   ├── image1.jpg
        │   ├── image2.png
        │   └── ...
-       ├── train/          # 训练数据集（如需微调）
-       └── val/            # 验证数据集（如需微调）
+       ├── train/                   # YOLO格式训练数据
+       │   ├── classes.txt
+       │   ├── data.yaml
+       │   ├── images/             # 训练图像
+       │   │   ├── image1.jpg
+       │   │   └── ...
+       │   ├── labels/             # YOLO格式标签
+       │   │   ├── image1.txt
+       │   │   └── ...
+       │   └── labels.cache
+       └── val/                     # YOLO格式验证数据
+           ├── classes.txt
+           ├── data.yaml
+           ├── images/             # 验证图像
+           │   ├── image1.jpg
+           │   └── ...
+           ├── labels/             # YOLO格式标签
+           │   ├── image1.txt
+           │   └── ...
+           └── labels.cache
    ```
 
 2. **数据集更换步骤**：
-   - 将新的训练数据集放入`datasets/Data/train/`目录
-   - 将新的验证数据集放入`datasets/Data/val/`目录
-   - 将待检测的图像放入`datasets/Data/test/`目录
+   - 推理数据：将待检测的图像直接放入`datasets/Data/test/`目录
+   - 训练数据：将图像放入`datasets/Data/train/images/`，标签放入`datasets/Data/train/labels/`
+   - 验证数据：将图像放入`datasets/Data/val/images/`，标签放入`datasets/Data/val/labels/`
    - 确保图像格式为`.jpg`、`.jpeg`或`.png`
-   - 如需使用YOLO格式标签文件进行微调，需按YOLO格式准备标签文件
+   - YOLO标签格式：每个图像对应一个同名.txt文件
 
 3. **数据集格式要求**：
    - 图像文件：建议分辨率在640x480以上，确保目标物体清晰可见
-   - 标签文件（如需）：YOLO格式，每个图像对应一个同名.txt文件
+   - YOLO标签格式：`class_id center_x center_y width height`（归一化坐标）
    - 数据质量：避免模糊、过曝或严重遮挡的图像
 
 ### 3. 任务切换示例
